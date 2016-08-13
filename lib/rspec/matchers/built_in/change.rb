@@ -58,21 +58,21 @@ module RSpec
         # @api private
         # @return [String]
         def failure_message
-          "expected #{@change_details.message} to have changed, " \
+          "expected #{@change_details.value_expression} to have changed, " \
           "but #{positive_failure_reason}"
         end
 
         # @api private
         # @return [String]
         def failure_message_when_negated
-          "expected #{@change_details.message} not to have changed, " \
+          "expected #{@change_details.value_expression} not to have changed, " \
           "but #{negative_failure_reason}"
         end
 
         # @api private
         # @return [String]
         def description
-          "change #{@change_details.message}"
+          "change #{@change_details.value_expression}"
         end
 
         # @private
@@ -115,7 +115,7 @@ module RSpec
 
         # @private
         def failure_message
-          "expected #{@change_details.message} to have changed " \
+          "expected #{@change_details.value_expression} to have changed " \
           "#{@relativity.to_s.tr('_', ' ')} " \
           "#{description_of @expected_delta}, but #{failure_reason}"
         end
@@ -136,7 +136,7 @@ module RSpec
 
         # @private
         def description
-          "change #{@change_details.message} " \
+          "change #{@change_details.value_expression} " \
           "#{@relativity.to_s.tr('_', ' ')} #{description_of @expected_delta}"
         end
 
@@ -175,7 +175,7 @@ module RSpec
 
         # @private
         def description
-          "change #{@change_details.message} #{change_description}"
+          "change #{@change_details.value_expression} #{change_description}"
         end
 
         # @private
@@ -202,30 +202,30 @@ module RSpec
         end
 
         def before_value_failure
-          "expected #{@change_details.message} " \
+          "expected #{@change_details.value_expression} " \
           "to have initially been #{description_of @expected_before}, " \
           "but was #{description_of @change_details.actual_before}"
         end
 
         def after_value_failure
-          "expected #{@change_details.message} " \
+          "expected #{@change_details.value_expression} " \
           "to have changed to #{description_of @expected_after}, " \
           "but is now #{description_of @change_details.actual_after}"
         end
 
         def did_not_change_failure
-          "expected #{@change_details.message} " \
+          "expected #{@change_details.value_expression} " \
           "to have changed #{change_description}, but did not change"
         end
 
         def did_change_failure
-          "expected #{@change_details.message} not to have changed, but " \
+          "expected #{@change_details.value_expression} not to have changed, but " \
           "did change from #{description_of @change_details.actual_before} " \
           "to #{description_of @change_details.actual_after}"
         end
 
         def not_given_a_block_failure
-          "expected #{@change_details.message} to have changed " \
+          "expected #{@change_details.value_expression} to have changed " \
           "#{change_description}, but was not given a block"
         end
       end
@@ -307,7 +307,7 @@ module RSpec
       # @private
       # Encapsulates the details of the before/after values.
       class ChangeDetails
-        attr_reader :message, :actual_before, :actual_after
+        attr_reader :actual_before, :actual_after
 
         def initialize(receiver=nil, message=nil, &block)
           if receiver && !message
@@ -318,8 +318,19 @@ module RSpec
               "You passed an object but no message."
             )
           end
-          @message    = message ? "##{message}" : "result"
-          @value_proc = block || lambda { receiver.__send__(message) }
+
+          @receiver = receiver
+          @message = message
+          @value_proc = block
+        end
+
+        def value_expression
+          @value_expression ||=
+            if @message
+              "##{@message}"
+            else
+              extract_value_block_snippet || 'result'
+            end
         end
 
         def perform_change(event_proc)
@@ -339,7 +350,9 @@ module RSpec
       private
 
         def evaluate_value_proc
-          case val = @value_proc.call
+          value_proc = @value_proc || lambda { @receiver.__send__(@message) }
+
+          case val = value_proc.call
           when IO # enumerable, but we don't want to dup it.
             val
           when Enumerable, String
@@ -347,6 +360,19 @@ module RSpec
           else
             val
           end
+        end
+
+        def extract_value_block_snippet
+          return nil unless @value_proc
+          path, line_number = @value_proc.source_location
+          source = RSpec.world.source_cache.source_from_file(path)
+          tokens = source.tokens_by_line_number[line_number]
+          tokens_from_change_ident = tokens.drop_while { |token| token.string != 'change' }
+          lbrace = tokens_from_change_ident.find { |token| token.type == :on_lbrace }
+          rbrace = tokens_from_change_ident.find { |token| token.type == :on_rbrace }
+          line = source.lines[line_number - 1]
+          snippet = line[(lbrace.location.column + 1)..(rbrace.location.column - 1)].strip
+          snippet.empty? ? nil : "`#{snippet}`"
         end
       end
     end
